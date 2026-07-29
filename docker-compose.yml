@@ -32,6 +32,10 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
       PORT: 3000
+      NODE_ENV: ${NODE_ENV:-development}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
+      REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-30}
     depends_on:
       db:
         condition: service_healthy

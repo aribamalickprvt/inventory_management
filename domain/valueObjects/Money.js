@@ -1,4 +1,3 @@
-
 class Money {
   constructor(amountInCents, currency = 'USD') {
     if (!Number.isInteger(amountInCents)) {

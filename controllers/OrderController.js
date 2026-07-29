@@ -1,4 +1,4 @@
-const orderService = require('../services/OrderService');
+const orderService = require("../services/OrderService");
 
 class OrderController {
   async create(req, res) {
@@ -9,7 +9,7 @@ class OrderController {
         id: order.id,
         status: order.status,
         total: order.total.toString(),
-        lineItems: order.lineItems.map(i => ({
+        lineItems: order.lineItems.map((i) => ({
           sku: i.sku,
           quantity: i.quantity,
           lineTotal: i.lineTotal.toString(),
@@ -30,6 +30,15 @@ class OrderController {
       });
     } catch (err) {
       res.status(404).json({ error: err.message });
+    }
+  }
+
+  async listAll(req, res) {
+    try {
+      const orders = await orderService.listOrders();
+      res.json(orders);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
   }
 }
