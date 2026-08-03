@@ -114,7 +114,7 @@ npm test
 
 RabbitMQ's management UI is available at `http://localhost:15672` (guest/guest) when running via Docker Compose — useful for watching queues fill and drain live while testing.
 
-## Setup — Option A: Docker Compose (recommended)
+## Setup: Docker Compose (recommended)
 ```bash
 cp .env.example .env    # edit DB_PASSWORD, JWT_ACCESS_SECRET, etc.
 docker compose up --build
