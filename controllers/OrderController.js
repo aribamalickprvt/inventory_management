@@ -1,15 +1,17 @@
-const orderService = require("../services/OrderService");
+const orderService = require('../services/OrderService');
 
 class OrderController {
   async create(req, res) {
     try {
       const { customerId, items } = req.body;
       const order = await orderService.createOrder({ customerId, items });
-      res.status(201).json({
+      // 202, not 201 — the order has been ACCEPTED for processing, not yet
+      // confirmed. The Worker decides CONFIRMED vs REJECTED asynchronously.
+      res.status(202).json({
         id: order.id,
         status: order.status,
-        total: order.total.toString(),
-        lineItems: order.lineItems.map((i) => ({
+        estimatedTotal: order.total.toString(),
+        lineItems: order.lineItems.map(i => ({
           sku: i.sku,
           quantity: i.quantity,
           lineTotal: i.lineTotal.toString(),
@@ -27,6 +29,7 @@ class OrderController {
         id: order.id,
         status: order.status,
         total: order.total.toString(),
+        rejectionReason: order.rejectionReason,
       });
     } catch (err) {
       res.status(404).json({ error: err.message });

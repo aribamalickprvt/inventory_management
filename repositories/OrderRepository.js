@@ -1,6 +1,6 @@
-const db = require("../config/db");
-const { Order, OrderLineItem } = require("../domain/Order");
-const Money = require("../domain/valueObjects/Money");
+const db = require('../config/db');
+const { Order, OrderLineItem } = require('../domain/Order');
+const Money = require('../domain/valueObjects/Money');
 
 /**
  * OrderRepository
@@ -9,14 +9,12 @@ const Money = require("../domain/valueObjects/Money");
  */
 class OrderRepository {
   async findById(orderId) {
-    const [orderRows] = await db.query("SELECT * FROM orders WHERE id = ?", [
-      orderId,
-    ]);
+    const [orderRows] = await db.query('SELECT * FROM orders WHERE id = ?', [orderId]);
     if (orderRows.length === 0) return null;
 
     const [lineRows] = await db.query(
-      "SELECT * FROM order_line_items WHERE order_id = ?",
-      [orderId],
+      'SELECT * FROM order_line_items WHERE order_id = ?',
+      [orderId]
     );
 
     const orderRow = orderRows[0];
@@ -25,6 +23,7 @@ class OrderRepository {
       customerId: orderRow.customer_id,
       status: orderRow.status,
       version: orderRow.version,
+      rejectionReason: orderRow.rejection_reason,
     });
 
     for (const row of lineRows) {
@@ -34,7 +33,7 @@ class OrderRepository {
           sku: row.sku,
           quantity: row.quantity,
           unitPrice: new Money(row.unit_price_cents, row.currency),
-        }),
+        })
       );
     }
     return order;
@@ -42,10 +41,10 @@ class OrderRepository {
 
   async findAll({ limit = 50 } = {}) {
     const [rows] = await db.query(
-      "SELECT id, customer_id, status, version FROM orders ORDER BY created_at DESC LIMIT ?",
-      [limit],
+      'SELECT id, customer_id, status, version FROM orders ORDER BY created_at DESC LIMIT ?',
+      [limit]
     );
-    return rows.map((row) => ({
+    return rows.map(row => ({
       id: row.id,
       customerId: row.customer_id,
       status: row.status,
@@ -58,14 +57,10 @@ class OrderRepository {
       await conn.beginTransaction();
 
       // New orders always get a plain INSERT (fresh UUID each time, so no conflict).
-      // Optimistic-locking UPDATEs (checking version before overwriting) belong in a
-      // separate updateWithLock() method once we add order-modification endpoints in
-      // a later week — MySQL's ON DUPLICATE KEY UPDATE doesn't support a WHERE clause,
-      // so that check has to be a plain UPDATE ... WHERE id = ? AND version = ?.
       const [result] = await conn.query(
         `INSERT INTO orders (id, customer_id, status, version)
          VALUES (?, ?, ?, ?)`,
-        [order.id, order.customerId, order.status, order.version],
+        [order.id, order.customerId, order.status, order.version]
       );
 
       for (const item of order.lineItems) {
@@ -73,14 +68,7 @@ class OrderRepository {
           `INSERT IGNORE INTO order_line_items
              (id, order_id, sku, quantity, unit_price_cents, currency)
            VALUES (?, ?, ?, ?, ?, ?)`,
-          [
-            item.id,
-            order.id,
-            item.sku,
-            item.quantity,
-            item.unitPrice.amountInCents,
-            item.unitPrice.currency,
-          ],
+          [item.id, order.id, item.sku, item.quantity, item.unitPrice.amountInCents, item.unitPrice.currency]
         );
       }
 
@@ -91,6 +79,27 @@ class OrderRepository {
       throw err;
     } finally {
       conn.release();
+    }
+  }
+
+  /**
+   * Week 3: real optimistic-locking UPDATE, the piece Week 1 deferred.
+   * The WHERE clause checks BOTH id and the version the caller last read.
+   * If another process (a duplicate worker delivery, a concurrent retry)
+   * already moved this order forward, affectedRows comes back 0 — we throw,
+   * and the Worker's retry/backoff logic treats that as a transient failure.
+   */
+  async updateStatus(orderId, status, expectedVersion, rejectionReason = null) {
+    const [result] = await db.query(
+      `UPDATE orders
+       SET status = ?, rejection_reason = ?, version = version + 1
+       WHERE id = ? AND version = ?`,
+      [status, rejectionReason, orderId, expectedVersion]
+    );
+    if (result.affectedRows === 0) {
+      throw new Error(
+        `Optimistic lock conflict: order ${orderId} was not at expected version ${expectedVersion}`
+      );
     }
   }
 }

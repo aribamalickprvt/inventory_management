@@ -2,7 +2,8 @@
 CREATE TABLE orders (
   id CHAR(36) PRIMARY KEY,
   customer_id CHAR(36) NOT NULL,
-  status ENUM('DRAFT', 'CONFIRMED', 'CANCELLED') NOT NULL DEFAULT 'DRAFT',
+  status ENUM('DRAFT', 'PENDING', 'CONFIRMED', 'REJECTED', 'CANCELLED') NOT NULL DEFAULT 'DRAFT',
+  rejection_reason VARCHAR(500) NULL,      -- set by the Worker if stock can't cover the order
   version INT NOT NULL DEFAULT 1,          -- optimistic locking
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

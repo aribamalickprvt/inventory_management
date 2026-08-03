@@ -1,8 +1,8 @@
 const Money = require('./valueObjects/Money');
 
- 
- //OrderLineItem - Entity (has identity, but lifecycle is owned by Order)
- 
+/**
+ * OrderLineItem - Entity (has identity, but lifecycle is owned by Order)
+ */
 class OrderLineItem {
   constructor({ id, sku, quantity, unitPrice }) {
     if (quantity <= 0) throw new Error('Quantity must be positive');
@@ -19,38 +19,70 @@ class OrderLineItem {
 
 /**
  * Order - Aggregate Root
+ *
+ * Week 3 lifecycle (async):
+ *   DRAFT   -> line items are being assembled (API request handling)
+ *   PENDING -> submitted, order.created event published, awaiting the Worker
+ *   CONFIRMED -> Worker verified + reserved stock successfully
+ *   REJECTED  -> Worker found insufficient stock (see rejectionReason)
+ *   CANCELLED -> manual cancellation (unrelated to the async pipeline)
+ *
  * Invariants enforced here, not in controllers/services:
- *   - Cannot be empty
- *   - Cannot add items once CONFIRMED
- *   - Total is always derived, never set directly
+ *   - Cannot be empty when submitted
+ *   - Cannot add items once no longer DRAFT
+ *   - Can only be confirmed/rejected from PENDING (the Worker's job)
  */
 class Order {
   static STATUS = {
     DRAFT: 'DRAFT',
+    PENDING: 'PENDING',
     CONFIRMED: 'CONFIRMED',
+    REJECTED: 'REJECTED',
     CANCELLED: 'CANCELLED',
   };
 
-  constructor({ id, customerId, status = Order.STATUS.DRAFT, version = 1 }) {
+  constructor({ id, customerId, status = Order.STATUS.DRAFT, version = 1, rejectionReason = null }) {
     this.id = id;
     this.customerId = customerId;
     this.status = status;
     this.lineItems = [];
-    this.version = version; // optimistic locking — needed later for CQRS/concurrency
+    this.version = version; // optimistic locking
+    this.rejectionReason = rejectionReason;
   }
 
   addLineItem({ id, sku, quantity, unitPrice }) {
     if (this.status !== Order.STATUS.DRAFT) {
-      throw new Error('Cannot modify a confirmed or cancelled order');
+      throw new Error('Cannot modify an order once it has been submitted');
     }
     this.lineItems.push(new OrderLineItem({ id, sku, quantity, unitPrice }));
   }
 
-  confirm() {
+  /** DRAFT -> PENDING. Called by OrderService right before the event is published. */
+  submit() {
+    if (this.status !== Order.STATUS.DRAFT) {
+      throw new Error('Only a draft order can be submitted');
+    }
     if (this.lineItems.length === 0) {
-      throw new Error('Cannot confirm an order with no line items');
+      throw new Error('Cannot submit an order with no line items');
+    }
+    this.status = Order.STATUS.PENDING;
+  }
+
+  /** PENDING -> CONFIRMED. Called by the Worker after stock is successfully reserved. */
+  confirm() {
+    if (this.status !== Order.STATUS.PENDING) {
+      throw new Error('Only a pending order can be confirmed');
     }
     this.status = Order.STATUS.CONFIRMED;
+  }
+
+  /** PENDING -> REJECTED. Called by the Worker when stock cannot cover the order. */
+  reject(reason) {
+    if (this.status !== Order.STATUS.PENDING) {
+      throw new Error('Only a pending order can be rejected');
+    }
+    this.status = Order.STATUS.REJECTED;
+    this.rejectionReason = reason;
   }
 
   cancel() {

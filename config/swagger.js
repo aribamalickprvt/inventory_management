@@ -6,7 +6,7 @@ const options = {
     info: {
       title: 'Inventory & Order Management API',
       version: '1.0.0',
-      description: 'High-scale distributed backend — Week 1: DDD + layered architecture. Week 2: OAuth2.0-style auth + RBAC.',
+      description: 'High-scale distributed backend — Week 1: DDD + layered architecture. Week 2: OAuth2.0-style auth + RBAC. Week 3: async order processing via RabbitMQ.',
     },
     servers: [{ url: '/api', description: 'API base path' }],
     components: {
@@ -69,8 +69,9 @@ const options = {
           type: 'object',
           properties: {
             id: { type: 'string', format: 'uuid' },
-            status: { type: 'string', example: 'CONFIRMED' },
+            status: { type: 'string', enum: ['PENDING', 'CONFIRMED', 'REJECTED', 'CANCELLED'], example: 'PENDING' },
             total: { type: 'string', example: '49.98 USD' },
+            rejectionReason: { type: 'string', nullable: true, example: null },
           },
         },
       },

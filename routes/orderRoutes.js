@@ -1,8 +1,8 @@
-const express = require("express");
-const orderController = require("../controllers/OrderController");
-const authenticate = require("../middleware/authenticate");
-const authorize = require("../middleware/authorize");
-const { User } = require("../domain/User");
+const express = require('express');
+const orderController = require('../controllers/OrderController');
+const authenticate = require('../middleware/authenticate');
+const authorize = require('../middleware/authorize');
+const { User } = require('../domain/User');
 
 const router = express.Router();
 
@@ -10,7 +10,12 @@ const router = express.Router();
  * @swagger
  * /orders:
  *   post:
- *     summary: Create and confirm a new order
+ *     summary: Submit a new order for asynchronous processing
+ *     description: >
+ *       Publishes an order.created event to RabbitMQ and returns immediately
+ *       with status PENDING. A Worker process validates and reserves stock
+ *       asynchronously, transitioning the order to CONFIRMED or REJECTED.
+ *       Poll GET /orders/{id} to observe the outcome.
  *     tags: [Orders]
  *     security:
  *       - bearerAuth: []
@@ -21,24 +26,24 @@ const router = express.Router();
  *           schema:
  *             $ref: '#/components/schemas/CreateOrderRequest'
  *     responses:
- *       201:
- *         description: Order created successfully
+ *       202:
+ *         description: Order accepted for asynchronous processing (status PENDING)
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/OrderResponse'
  *       400:
- *         description: Validation error (unknown SKU, insufficient stock, etc.)
+ *         description: Validation error (unknown SKU, malformed request)
  *       401:
  *         description: Missing, invalid, or expired access token
  *       403:
  *         description: Authenticated but role not permitted
  */
 router.post(
-  "/orders",
+  '/orders',
   authenticate,
   authorize(User.ROLES.CUSTOMER, User.ROLES.ADMIN),
-  orderController.create,
+  orderController.create
 );
 
 /**
@@ -56,10 +61,10 @@ router.post(
  *         description: Non-admin role attempted access
  */
 router.get(
-  "/orders",
+  '/orders',
   authenticate,
   authorize(User.ROLES.ADMIN),
-  orderController.listAll,
+  orderController.listAll
 );
 
 /**
@@ -89,10 +94,10 @@ router.get(
  *         description: Order not found
  */
 router.get(
-  "/orders/:id",
+  '/orders/:id',
   authenticate,
   authorize(User.ROLES.CUSTOMER, User.ROLES.ADMIN),
-  orderController.getById,
+  orderController.getById
 );
 
 module.exports = router;
