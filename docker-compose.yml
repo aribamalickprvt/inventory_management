@@ -32,6 +32,20 @@ services:
       timeout: 5s
       retries: 10
 
+  mongo:
+    image: mongo:7
+    container_name: inventory-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   api:
     build: .
     container_name: inventory-api
@@ -39,7 +53,7 @@ services:
     command: node server.js
     ports:
       - "${PORT:-3000}:3000"
-    environment:
+    environment: &common_env
       DB_HOST: db
       DB_PORT: 3306
       DB_USER: root
@@ -53,10 +67,14 @@ services:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
       RETRY_MAX_ATTEMPTS: ${RETRY_MAX_ATTEMPTS:-5}
       RETRY_BASE_DELAY_MS: ${RETRY_BASE_DELAY_MS:-2000}
+      MONGO_URL: mongodb://mongo:27017
+      MONGO_DB_NAME: ${MONGO_DB_NAME:-inventory_order_readmodel}
     depends_on:
       db:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      mongo:
         condition: service_healthy
 
   worker:
@@ -64,25 +82,27 @@ services:
     container_name: inventory-worker
     restart: unless-stopped
     command: node worker.js
-    environment:
-      DB_HOST: db
-      DB_PORT: 3306
-      DB_USER: root
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_NAME: ${DB_NAME}
-      PORT: 3000
-      NODE_ENV: ${NODE_ENV:-development}
-      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
-      ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
-      REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-30}
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
-      RETRY_MAX_ATTEMPTS: ${RETRY_MAX_ATTEMPTS:-5}
-      RETRY_BASE_DELAY_MS: ${RETRY_BASE_DELAY_MS:-2000}
+    environment: *common_env
     depends_on:
       db:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      mongo:
+        condition: service_healthy
+
+  sync-worker:
+    build: .
+    container_name: inventory-sync-worker
+    restart: unless-stopped
+    command: node syncWorker.js
+    environment: *common_env
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
 
 volumes:
   db_data:
+  mongo_data:

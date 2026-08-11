@@ -1,6 +1,7 @@
 const orderRepository = require('../repositories/OrderRepository');
 const inventoryRepository = require('../repositories/InventoryRepository');
 const { Order } = require('../domain/Order');
+const readModelSyncPublisher = require('../events/ReadModelSyncPublisher');
 const logger = require('../config/logger');
 
 class OrderProcessingService {
@@ -37,6 +38,7 @@ class OrderProcessingService {
     if (shortages.length > 0) {
       order.reject(`Insufficient stock for: ${shortages.join(', ')}`);
       await orderRepository.updateStatus(order.id, order.status, expectedVersion, order.rejectionReason);
+      await readModelSyncPublisher.publishOrderSnapshot(order);
       logger.info('order_rejected', { orderId, correlationId: orderId, reason: order.rejectionReason });
       return { outcome: 'REJECTED', reason: order.rejectionReason };
     }
@@ -47,6 +49,7 @@ class OrderProcessingService {
 
     order.confirm();
     await orderRepository.updateStatus(order.id, order.status, expectedVersion);
+    await readModelSyncPublisher.publishOrderSnapshot(order);
     logger.info('order_confirmed', { orderId, correlationId: orderId });
     return { outcome: 'CONFIRMED' };
   }

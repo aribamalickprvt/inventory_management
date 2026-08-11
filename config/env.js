@@ -18,6 +18,10 @@ const envSchema = z.object({
   RABBITMQ_URL: z.string().min(1, 'RABBITMQ_URL is required').default('amqp://guest:guest@localhost:5672'),
   RETRY_MAX_ATTEMPTS: z.coerce.number().int().nonnegative().default(5),
   RETRY_BASE_DELAY_MS: z.coerce.number().int().positive().default(2000),
+
+  // Week 4: CQRS read store
+  MONGO_URL: z.string().min(1, 'MONGO_URL is required').default('mongodb://localhost:27017'),
+  MONGO_DB_NAME: z.string().min(1).default('inventory_order_readmodel'),
 });
 
 function loadEnv() {

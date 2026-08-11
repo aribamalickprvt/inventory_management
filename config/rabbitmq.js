@@ -18,6 +18,13 @@ const logger = require('./logger');
  *   orders_dlq_exchange (direct) --[order.dead]--> order_dlq
  *     Final resting place once RETRY_MAX_ATTEMPTS is exhausted. Nothing
  *     auto-consumes this — a human (or a future alerting job) inspects it.
+ *
+ *   Week 4 — CQRS read-model sync:
+ *   order_sync_exchange (fanout) --> order_readmodel_sync_queue  <-- syncWorker.js consumes here
+ *     Fanout ignores routing keys entirely — every snapshot published here
+ *     goes to every bound queue. Only one queue is bound today, but a
+ *     fanout is the right primitive if a second read store (e.g. a search
+ *     index) needs the same snapshots later without touching this code.
  */
 const EXCHANGE = 'orders_exchange';
 const QUEUE_PROCESSING = 'order_processing_queue';
@@ -30,6 +37,9 @@ const ROUTING_KEY_RETRY = 'order.retry';
 const DLQ_EXCHANGE = 'orders_dlq_exchange';
 const DLQ_QUEUE = 'order_dlq';
 const ROUTING_KEY_DEAD = 'order.dead';
+
+const SYNC_EXCHANGE = 'order_sync_exchange';
+const SYNC_QUEUE = 'order_readmodel_sync_queue';
 
 let connection = null;
 let channel = null;
@@ -68,6 +78,10 @@ async function setupTopology(ch) {
   await ch.assertExchange(DLQ_EXCHANGE, 'direct', { durable: true });
   await ch.assertQueue(DLQ_QUEUE, { durable: true });
   await ch.bindQueue(DLQ_QUEUE, DLQ_EXCHANGE, ROUTING_KEY_DEAD);
+
+  await ch.assertExchange(SYNC_EXCHANGE, 'fanout', { durable: true });
+  await ch.assertQueue(SYNC_QUEUE, { durable: true });
+  await ch.bindQueue(SYNC_QUEUE, SYNC_EXCHANGE, ''); // fanout — routing key is ignored
 }
 
 async function closeConnection() {
@@ -89,4 +103,6 @@ module.exports = {
   DLQ_EXCHANGE,
   DLQ_QUEUE,
   ROUTING_KEY_DEAD,
+  SYNC_EXCHANGE,
+  SYNC_QUEUE,
 };

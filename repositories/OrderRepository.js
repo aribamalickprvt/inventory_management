@@ -39,17 +39,11 @@ class OrderRepository {
     return order;
   }
 
-  async findAll({ limit = 50 } = {}) {
-    const [rows] = await db.query(
-      'SELECT id, customer_id, status, version FROM orders ORDER BY created_at DESC LIMIT ?',
-      [limit]
-    );
-    return rows.map(row => ({
-      id: row.id,
-      customerId: row.customer_id,
-      status: row.status,
-    }));
-  }
+  // Note: there is deliberately no findAll() here anymore. Week 4 moved
+  // listing to ListOrdersQueryHandler, which reads from the denormalized
+  // read store (readmodel/OrderReadModelRepository) instead of MySQL — the
+  // whole point of CQRS is that the write store no longer serves list/read
+  // traffic at all.
 
   async save(order) {
     const conn = await db.getConnection();

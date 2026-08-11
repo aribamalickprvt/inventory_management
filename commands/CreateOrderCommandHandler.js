@@ -4,21 +4,24 @@ const Money = require('../domain/valueObjects/Money');
 const orderRepository = require('../repositories/OrderRepository');
 const inventoryRepository = require('../repositories/InventoryRepository');
 const orderEventPublisher = require('../events/OrderEventPublisher');
+const readModelSyncPublisher = require('../events/ReadModelSyncPublisher');
 
 /**
- * OrderService
- * Owns the use-case orchestration: load aggregate(s), call domain methods,
- * persist. No SQL here, no req/res here.
+ * CQRS: Command side. Writes go through the domain and the write store
+ * (MySQL) exactly as in Weeks 1-3 — CQRS changes how READS work, not how
+ * writes work. This class replaces the old OrderService.createOrder().
  *
- * Week 3: order creation is now asynchronous. This method does the CHEAP,
- * fast-fail validation synchronously (does the SKU exist at all? — a client
- * input error, worth rejecting immediately) but deliberately does NOT check
- * or reserve *quantity* here. That's the expensive, contention-prone part
- * under real concurrent load, and it's deferred to the Worker so the HTTP
- * response never blocks on it.
+ * After a successful write, TWO independent events fire:
+ *   1. order.created           -> Week 3 processing pipeline (stock
+ *      check/reservation), consumed by worker.js.
+ *   2. a read-model snapshot   -> Week 4 sync pipeline that keeps the
+ *      separate Read Store eventually consistent, consumed by syncWorker.js.
+ * They're deliberately independent — the processing pipeline doesn't know
+ * the read store exists, and the sync pipeline doesn't know or care about
+ * stock levels. Each does exactly one job.
  */
-class OrderService {
-  async createOrder({ customerId, items }) {
+class CreateOrderCommandHandler {
+  async handle({ customerId, items }) {
     const order = new Order({ id: randomUUID(), customerId });
 
     for (const { sku, quantity } of items) {
@@ -35,20 +38,12 @@ class OrderService {
 
     order.submit(); // DRAFT -> PENDING
     await orderRepository.save(order);
+
     await orderEventPublisher.publishOrderCreated({ orderId: order.id });
+    await readModelSyncPublisher.publishOrderSnapshot(order);
 
     return order; // status is PENDING — the Worker decides CONFIRMED vs REJECTED
   }
-
-  async getOrder(orderId) {
-    const order = await orderRepository.findById(orderId);
-    if (!order) throw new Error('Order not found');
-    return order;
-  }
-
-  async listOrders() {
-    return orderRepository.findAll();
-  }
 }
 
-module.exports = new OrderService();
+module.exports = new CreateOrderCommandHandler();
