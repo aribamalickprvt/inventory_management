@@ -1,5 +1,6 @@
 const { randomUUID } = require('crypto');
 const { getChannel, EXCHANGE, ROUTING_KEY_CREATED } = require('../config/rabbitmq');
+const { injectTraceContext } = require('../config/otelContext');
 const logger = require('../config/logger');
 
 class OrderEventPublisher {
@@ -19,7 +20,10 @@ class OrderEventPublisher {
       {
         persistent: true, // survives a RabbitMQ restart — matches the queue's durable: true
         contentType: 'application/json',
-        headers: { 'x-retry-count': 0 },
+        // Trace context goes here too, alongside the retry counter — this is
+        // what lets worker.js's span show up as a CHILD of this HTTP
+        // request's span in Jaeger, instead of as an unrelated trace.
+        headers: injectTraceContext({ 'x-retry-count': 0 }),
       }
     );
 

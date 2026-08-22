@@ -1,4 +1,5 @@
 const { getChannel, SYNC_EXCHANGE } = require('../config/rabbitmq');
+const { injectTraceContext } = require('../config/otelContext');
 const logger = require('../config/logger');
 
 /**
@@ -30,7 +31,7 @@ class ReadModelSyncPublisher {
       SYNC_EXCHANGE,
       '', // fanout — routing key is ignored
       Buffer.from(JSON.stringify(snapshot)),
-      { persistent: true, contentType: 'application/json' }
+      { persistent: true, contentType: 'application/json', headers: injectTraceContext() }
     );
 
     logger.info('readmodel_sync_event_published', {

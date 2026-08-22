@@ -2,9 +2,29 @@ const express = require('express');
 const orderController = require('../controllers/OrderController');
 const authenticate = require('../middleware/authenticate');
 const authorize = require('../middleware/authorize');
+const rateLimiter = require('../middleware/rateLimiter');
+const env = require('../config/env');
 const { User } = require('../domain/User');
 
 const router = express.Router();
+
+// Week 5: a SECOND, per-user bucket specifically for order creation, layered
+// on top of the general /api bucket in app.js. This runs AFTER authenticate,
+// so it can key by req.user.id — "you personally can create at most N orders
+// per minute" is a different (and often stricter) concern than "this IP
+// can't flood any endpoint."
+//
+// Disabled during automated test runs for the same reason as app.js's global
+// limiters — see the comment there. The feature itself is covered by
+// tests/rateLimiter.test.js against an isolated app instance.
+const orderCreateRateLimiter = env.NODE_ENV === 'test'
+  ? (req, res, next) => next()
+  : rateLimiter({
+      capacity: env.RATE_LIMIT_ORDER_CREATE_CAPACITY,
+      refillRatePerSec: env.RATE_LIMIT_ORDER_CREATE_REFILL_PER_SEC,
+      keyPrefix: 'ratelimit:order-create',
+      keyFn: (req) => req.user?.id || req.ip,
+    });
 
 /**
  * @swagger
@@ -38,11 +58,14 @@ const router = express.Router();
  *         description: Missing, invalid, or expired access token
  *       403:
  *         description: Authenticated but role not permitted
+ *       429:
+ *         description: Rate limit exceeded (per-user order creation quota)
  */
 router.post(
   '/orders',
   authenticate,
   authorize(User.ROLES.CUSTOMER, User.ROLES.ADMIN),
+  orderCreateRateLimiter,
   orderController.create
 );
 

@@ -6,7 +6,7 @@ const logger = winston.createLogger({
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.errors({ stack: true }),
-    winston.format.json() // structured JSON output 
+    winston.format.json() // structured JSON output — parseable by log aggregators later
   ),
   defaultMeta: { service: 'inventory-order-api' },
   transports: [

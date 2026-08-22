@@ -1,4 +1,6 @@
 require('dotenv').config();
+require('./tracing').start('inventory-order-worker'); // must run before anything else is required
+
 const env = require('./config/env');
 const logger = require('./config/logger');
 const {
@@ -12,6 +14,7 @@ const {
 } = require('./config/rabbitmq');
 const orderProcessingService = require('./services/OrderProcessingService');
 const { decideRetry } = require('./worker/retryPolicy');
+const { runInPropagatedContext } = require('./config/otelContext');
 
 async function handleMessage(channel, msg) {
   if (!msg) return;
@@ -27,34 +30,46 @@ async function handleMessage(channel, msg) {
 
   const retryCount = msg.properties.headers?.['x-retry-count'] || 0;
 
-  logger.info('event_received', {
-    eventType: event.eventType,
-    eventId: event.eventId,
-    correlationId: event.orderId,
-    orderId: event.orderId,
-    retryCount,
-  });
+  await runInPropagatedContext(
+    'inventory-order-worker',
+    'process order.created event',
+    msg.properties.headers,
+    async (span) => {
+      span.setAttribute('order.id', event.orderId);
+      span.setAttribute('event.id', event.eventId);
+      span.setAttribute('retry.count', retryCount);
 
-  try {
-    const result = await orderProcessingService.processOrder(event.orderId);
-    logger.info('event_processed', {
-      eventId: event.eventId,
-      correlationId: event.orderId,
-      orderId: event.orderId,
-      outcome: result.outcome,
-      retryCount,
-    });
-    channel.ack(msg);
-  } catch (err) {
-    logger.error('event_processing_failed', {
-      eventId: event.eventId,
-      correlationId: event.orderId,
-      orderId: event.orderId,
-      error: err.message,
-      retryCount,
-    });
-    await handleFailure(channel, msg, event, retryCount, err);
-  }
+      logger.info('event_received', {
+        eventType: event.eventType,
+        eventId: event.eventId,
+        correlationId: event.orderId,
+        orderId: event.orderId,
+        retryCount,
+      });
+
+      try {
+        const result = await orderProcessingService.processOrder(event.orderId);
+        span.setAttribute('order.outcome', result.outcome);
+        logger.info('event_processed', {
+          eventId: event.eventId,
+          correlationId: event.orderId,
+          orderId: event.orderId,
+          outcome: result.outcome,
+          retryCount,
+        });
+        channel.ack(msg);
+      } catch (err) {
+        logger.error('event_processing_failed', {
+          eventId: event.eventId,
+          correlationId: event.orderId,
+          orderId: event.orderId,
+          error: err.message,
+          retryCount,
+        });
+        await handleFailure(channel, msg, event, retryCount, err);
+      }
+    }
+  );
 }
 
 async function handleFailure(channel, msg, event, retryCount, err) {
@@ -85,6 +100,8 @@ async function handleFailure(channel, msg, event, retryCount, err) {
   // RETRY: publish a delayed copy into the retry queue, then ack the original.
   // The retry queue's per-message TTL (`expiration`) + its dead-letter config
   // (see config/rabbitmq.js) is what makes the delay happen — no timers here.
+  // Spread the ORIGINAL headers first so the traceparent injected by
+  // OrderEventPublisher survives the retry — only the retry counter changes.
   channel.publish(
     RETRY_EXCHANGE,
     ROUTING_KEY_RETRY,
@@ -93,7 +110,7 @@ async function handleFailure(channel, msg, event, retryCount, err) {
       persistent: true,
       contentType: 'application/json',
       expiration: String(decision.delayMs),
-      headers: { 'x-retry-count': decision.nextRetryCount },
+      headers: { ...msg.properties.headers, 'x-retry-count': decision.nextRetryCount },
     }
   );
   logger.warn('event_retry_scheduled', {

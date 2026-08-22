@@ -22,6 +22,18 @@ const envSchema = z.object({
   // Week 4: CQRS read store
   MONGO_URL: z.string().min(1, 'MONGO_URL is required').default('mongodb://localhost:27017'),
   MONGO_DB_NAME: z.string().min(1).default('inventory_order_readmodel'),
+
+  // Week 5: Rate limiting
+  REDIS_URL: z.string().min(1, 'REDIS_URL is required').default('redis://localhost:6379'),
+  RATE_LIMIT_API_CAPACITY: z.coerce.number().int().positive().default(20),
+  RATE_LIMIT_API_REFILL_PER_SEC: z.coerce.number().positive().default(5),
+  RATE_LIMIT_AUTH_CAPACITY: z.coerce.number().int().positive().default(5),
+  RATE_LIMIT_AUTH_REFILL_PER_SEC: z.coerce.number().positive().default(1),
+  RATE_LIMIT_ORDER_CREATE_CAPACITY: z.coerce.number().int().positive().default(10),
+  RATE_LIMIT_ORDER_CREATE_REFILL_PER_SEC: z.coerce.number().positive().default(2),
+
+  // Week 5: Distributed tracing
+  OTEL_EXPORTER_OTLP_ENDPOINT: z.string().min(1).default('http://localhost:4318'),
 });
 
 function loadEnv() {

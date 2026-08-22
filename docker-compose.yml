@@ -46,6 +46,29 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    container_name: inventory-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    container_name: inventory-jaeger
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686" # Jaeger UI — http://localhost:16686
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver (what this project's exporters use)
+
   api:
     build: .
     container_name: inventory-api
@@ -69,6 +92,14 @@ services:
       RETRY_BASE_DELAY_MS: ${RETRY_BASE_DELAY_MS:-2000}
       MONGO_URL: mongodb://mongo:27017
       MONGO_DB_NAME: ${MONGO_DB_NAME:-inventory_order_readmodel}
+      REDIS_URL: redis://redis:6379
+      RATE_LIMIT_API_CAPACITY: ${RATE_LIMIT_API_CAPACITY:-20}
+      RATE_LIMIT_API_REFILL_PER_SEC: ${RATE_LIMIT_API_REFILL_PER_SEC:-5}
+      RATE_LIMIT_AUTH_CAPACITY: ${RATE_LIMIT_AUTH_CAPACITY:-5}
+      RATE_LIMIT_AUTH_REFILL_PER_SEC: ${RATE_LIMIT_AUTH_REFILL_PER_SEC:-1}
+      RATE_LIMIT_ORDER_CREATE_CAPACITY: ${RATE_LIMIT_ORDER_CREATE_CAPACITY:-10}
+      RATE_LIMIT_ORDER_CREATE_REFILL_PER_SEC: ${RATE_LIMIT_ORDER_CREATE_REFILL_PER_SEC:-2}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
     depends_on:
       db:
         condition: service_healthy
@@ -76,6 +107,10 @@ services:
         condition: service_healthy
       mongo:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
 
   worker:
     build: .
@@ -90,6 +125,10 @@ services:
         condition: service_healthy
       mongo:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
 
   sync-worker:
     build: .
@@ -102,6 +141,8 @@ services:
         condition: service_healthy
       mongo:
         condition: service_healthy
+      jaeger:
+        condition: service_started
 
 volumes:
   db_data:

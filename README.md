@@ -4,14 +4,10 @@
 - **Domain-Driven Design**: business logic lives in `domain/`, isolated from Express and MySQL.
 - **Layered architecture**: strict one-way dependency flow, `routes -> controllers -> commands/queries -> repositories -> domain`.
 - **Aggregates**: `Order` and `InventoryItem` are separate aggregate roots. They reference each other only by ID (SKU), never by object reference.
-<<<<<<< HEAD
-- **Event-driven**: order creation is asynchronous — the API publishes, a Worker consumes (see Week 3 below).
-- Future weeks layer in: CQRS, Token Bucket rate limiting, Distributed Tracing, Chaos Engineering.
-=======
 - **Event-driven**: order creation is asynchronous — the API publishes, a Worker consumes (Week 3).
 - **CQRS**: writes and reads go through entirely separate paths — a Command handler + MySQL for writes, Query handlers + MongoDB for reads (Week 4).
-- Future weeks layer in: Token Bucket rate limiting, Distributed Tracing, Chaos Engineering.
->>>>>>> 7acbccb (CQRS)
+- **Resilient by design**: rate limiting and distributed tracing are layered in without becoming single points of failure — Redis being down degrades rate limiting, not the API (Week 5).
+- Future weeks layer in: Chaos Engineering.
 
 ## Bounded Contexts
 | Context   | Aggregate Root  | Owns                          |
@@ -23,46 +19,27 @@
 ## Layer Rules
 ```
 routes/       -> HTTP wiring only. No logic.
-<<<<<<< HEAD
-controllers/  -> req/res parsing + formatting. Calls services.
-services/     -> use-case orchestration. Calls repositories + domain.
-repositories/ -> raw SQL only. No business rules.
-domain/       -> Aggregates, Entities, Value Objects. Pure JS. Never imports express or mysql2.
-config/       -> env validation (Zod), DB pool, logger, Swagger spec, RabbitMQ topology.
-middleware/   -> cross-cutting concerns (request logging, auth, RBAC).
-events/       -> event publishers (API side of the async handoff).
-worker/       -> pure, infra-free decision logic used by worker.js (e.g. retry policy).
-scripts/      -> one-off ops scripts (DB seeding).
-tests/        -> integration + unit tests (Jest + Supertest).
-worker.js     -> standalone process: consumes events, processes orders, handles retry/DLQ.
-server.js     -> standalone process: the HTTP API.
-```
-
-## Operational Tooling (Week 1 post-review additions)
-- **`docker-compose.yml`** — brings up API + MySQL + RabbitMQ + Worker together with one command.
-- **`config/env.js`** — validates all required environment variables at startup using **Zod**; the process exits immediately with a clear error if config is missing or malformed.
-=======
 controllers/  -> req/res parsing + formatting. Calls a Command handler (writes) or Query handler (reads).
 commands/     -> CQRS write side. Orchestrates domain + write-store repositories (MySQL).
 queries/      -> CQRS read side. Reads ONLY from readmodel/ (MongoDB) — never MySQL, never the domain layer.
 repositories/ -> raw SQL only (MySQL, write store). No business rules.
 readmodel/    -> MongoDB read-store repository + the sync logic that keeps it eventually consistent.
 domain/       -> Aggregates, Entities, Value Objects. Pure JS. Never imports express, mysql2, or mongodb.
-config/       -> env validation (Zod), DB pool, Mongo client, logger, Swagger spec, RabbitMQ topology.
-middleware/   -> cross-cutting concerns (request logging, auth, RBAC).
+config/       -> env validation (Zod), DB pool, Mongo client, Redis client, logger, Swagger spec, RabbitMQ topology.
+middleware/   -> cross-cutting concerns (request logging, auth, RBAC, rate limiting).
 events/       -> event publishers (API/Worker side of async handoffs — processing AND read-model sync).
 worker/       -> pure, infra-free decision logic used by worker.js (e.g. retry policy).
-scripts/      -> one-off ops scripts (DB seeding, read-latency benchmark).
+scripts/      -> one-off ops scripts (DB seeding, read-latency benchmark, rate-limit load test).
 tests/        -> integration + unit tests (Jest + Supertest).
 worker.js       -> standalone process: consumes order.created, processes orders, handles retry/DLQ.
 syncWorker.js   -> standalone process: consumes order snapshots, upserts the MongoDB read store.
 server.js       -> standalone process: the HTTP API.
+tracing.js      -> OpenTelemetry SDK init. Required FIRST by server.js/worker.js/syncWorker.js.
 ```
 
 ## Operational Tooling (Week 1 post-review additions)
 - **`docker-compose.yml`** — brings up API + MySQL + RabbitMQ + MongoDB + both Workers together with one command.
 - **`config/env.js`** — validates all required environment variables at startup using **Zod**; exits immediately with a clear error if config is missing or malformed.
->>>>>>> 7acbccb (CQRS)
 - **`config/logger.js`** — structured JSON logging via **Winston**, replacing `console.log`.
 - **`routes/healthRoutes.js`** — `/health/live` and `/health/ready` (checks DB connectivity too).
 - **`scripts/seed.js`** — populates `inventory_items` with sample data (`npm run seed`).
@@ -96,13 +73,8 @@ server.js       -> standalone process: the HTTP API.
 
 **The flow:**
 ```
-<<<<<<< HEAD
-Client -> POST /api/orders -> OrderService validates SKUs exist (cheap, fast-fail)
-                            -> Order saved as PENDING
-=======
 Client -> POST /api/orders -> CreateOrderCommandHandler validates SKUs exist (cheap, fast-fail)
                             -> Order saved as PENDING (MySQL, write store)
->>>>>>> 7acbccb (CQRS)
                             -> order.created event published to RabbitMQ
                             -> 202 Accepted returned immediately (does NOT wait for stock check)
 
@@ -110,37 +82,6 @@ Worker  -> consumes order.created from order_processing_queue
         -> checks real stock availability for every line item
         -> if sufficient: atomically decrements inventory, order -> CONFIRMED
         -> if insufficient: order -> REJECTED (with a reason)
-<<<<<<< HEAD
-
-Client  -> GET /api/orders/{id} -> polls to see PENDING / CONFIRMED / REJECTED
-```
-
-**Topology** (`config/rabbitmq.js`, shared by both API and Worker):
-| Exchange | Queue | Purpose |
-|---|---|---|
-| `orders_exchange` | `order_processing_queue` | Main queue — Worker consumes here |
-| `orders_retry_exchange` | `order_retry_queue` | Holding queue — per-message TTL implements the backoff delay, then dead-letters back into `orders_exchange` |
-| `orders_dlq_exchange` | `order_dlq` | Final resting place after retries are exhausted — inspected manually |
-
-**Retry / backoff / DLQ** (`worker/retryPolicy.js` + `worker.js`):
-- On processing failure, the Worker doesn't requeue-and-immediately-retry — it publishes a **delayed copy** into `order_retry_queue` with `expiration` (per-message TTL) set to `RETRY_BASE_DELAY_MS * 2^retryCount` — i.e. exponential backoff (2s, 4s, 8s, 16s, 32s by default).
-- The retry queue itself has no consumer; its `x-dead-letter-exchange` config automatically routes the message back into the main queue once its TTL expires — no application-level timers needed.
-- After `RETRY_MAX_ATTEMPTS` (default 5), the message is published to the DLQ instead of retried again, and the failure is logged as `event_dead_lettered`.
-- The retry decision itself (`decideRetry()`) is a **pure function** with zero I/O, deliberately extracted from `worker.js` so it's unit-testable without any RabbitMQ or DB connection.
-
-**Idempotency:** RabbitMQ is at-least-once delivery, so the same event can be processed twice (redelivery after a crash, a retry racing a success). `OrderProcessingService.processOrder()` checks the order is still `PENDING` before acting — if it's already `CONFIRMED`/`REJECTED`, processing is skipped and logged as `order_already_processed`.
-
-**Structured logging across the full event lifecycle** — every stage is logged as JSON with `orderId` doubling as a correlation ID, so the whole journey of one order is greppable by that single value:
-`event_published` (API) → `event_received` → `event_processed` / `event_processing_failed` → `event_retry_scheduled` (if applicable) → `event_dead_lettered` (if all retries exhausted) → `order_confirmed` / `order_rejected` / `order_already_processed`.
-
-**Running the Worker:**
-```bash
-npm run worker        # or npm run worker:dev for auto-restart
-```
-Via Docker Compose, the `worker` service starts automatically alongside `api`.
-
-**Testing:**
-=======
 ```
 
 **Topology** (`config/rabbitmq.js`, shared by API and both Workers):
@@ -211,44 +152,71 @@ Compares `OrderRepository.findById()` (MySQL: two queries + aggregate reconstruc
 > | Write store (MySQL) | _fill in_ | _fill in_ | _fill in_ | _fill in_ |
 > | Read store (MongoDB) | _fill in_ | _fill in_ | _fill in_ | _fill in_ |
 
+## Week 5: Rate Limiting (Redis Token Bucket) + Distributed Tracing (OpenTelemetry/Jaeger)
+
+### Token Bucket rate limiter, implemented from scratch
+
+`middleware/rateLimiter.js` implements the Token Bucket algorithm as a single **atomic Redis Lua script** — not a rate-limiting library. Each identity (user ID if authenticated, IP otherwise) gets a bucket with a capacity (burst size) and a refill rate (tokens/second). Every request: top up the bucket based on elapsed time since it was last touched (capped at capacity), then try to spend one token.
+
+Running the whole read-refill-consume-write cycle as one `EVAL` is what makes it safe under concurrent requests — Redis executes Lua scripts atomically, so two simultaneous requests against the same bucket can't both read "1 token left" and both succeed. A naive `GET` then `SET` in application code would have exactly that race.
+
+**Three tiers, each independently configurable:**
+| Bucket | Keyed by | Purpose |
+|---|---|---|
+| `ratelimit:auth` | IP address | Strict — brute-force/credential-stuffing protection on `/api/auth/*`, where there's no user identity yet |
+| `ratelimit:api` | IP address | Looser general-purpose limit across all of `/api` |
+| `ratelimit:order-create` | authenticated user ID | Per-user quota specifically on `POST /api/orders`, applied after `authenticate` — "you personally can create at most N orders/minute," independent of the IP-based limits |
+
+**Graceful degradation:** if Redis is unreachable, the middleware catches the failure and **fails open** — the request is allowed through rather than rejected. `config/redis.js` is configured with `maxRetriesPerRequest: 1` and `enableOfflineQueue: false` specifically so a failed command surfaces fast instead of hanging, which is what makes fast fail-open possible. The tradeoff (temporarily unlimited traffic during a Redis outage) is deliberate — availability of the core API matters more than strict enforcement of a secondary protection — and it's logged loudly (`rate_limiter_fail_open`) so it's visible in monitoring rather than silently swallowed. `GET /health/ready` reports Redis status as a diagnostic field without ever failing readiness because of it.
+
+**Disabled during `npm test`:** automated test suites fire many rapid requests from the same loopback address, which isn't representative of real traffic and would make unrelated tests flaky. `jest.config.js` sets `NODE_ENV=test` (portably, works on Windows too) and `app.js`/`orderRoutes.js` skip the global limiters in that mode. The feature itself is still fully covered by `tests/rateLimiter.test.js`, which builds its own isolated Express app around the exact same middleware with a deliberately tiny capacity.
+
+**Load testing:**
+```bash
+npm run loadtest                                              # bursts GET /health/live
+npm run loadtest -- http://localhost:3000/api/auth/login POST 30 10  # url method total concurrency
+```
+Fires a configurable burst of concurrent requests and reports the status-code breakdown, empirically proving the bucket allows a burst up to its capacity and then returns `429` until it refills.
+
+### Distributed tracing with OpenTelemetry + Jaeger
+
+**Why `tracing.js` is a separate file loaded first:** OpenTelemetry's auto-instrumentation works by monkey-patching modules (`express`, `mysql2`, `mongodb`, `amqplib`, `ioredis`) the moment they're first `require()`'d. If `app.js` loaded before tracing initialized, the patching would happen too late and those calls would silently produce no spans. That's why `server.js`, `worker.js`, and `syncWorker.js` all call `require('./tracing').start(serviceName)` as their literal first line, before even requiring `./app`.
+
+**What's instrumented automatically** (via `@opentelemetry/auto-instrumentations-node`): every HTTP request through Express, every MySQL query via `mysql2`, every MongoDB operation, every Redis command via `ioredis`. No code changes needed for any of these — spans are created and nested automatically based on call stack.
+
+**What required manual work — tracing across RabbitMQ:** auto-instrumentation has no idea "publish a message" and "consume a message" are related; from its point of view they're two unrelated operations in two separate processes. `config/otelContext.js` implements the standard W3C Trace Context pattern to bridge that gap:
+- `injectTraceContext()` — called by both publishers (`OrderEventPublisher`, `ReadModelSyncPublisher`) to stamp the current trace ID into the AMQP message headers before publishing.
+- `runInPropagatedContext()` — called by both workers (`worker.js`, `syncWorker.js`) to extract that context back out of the message headers and start the processing span as a **child** of it.
+
+The result: a single order creation produces ONE connected trace in Jaeger spanning `POST /api/orders` (API process) → `process order.created event` (Worker process) → `sync order read model` (Sync Worker process), even though these run in three separate Node processes communicating only via RabbitMQ. Without the manual propagation step, Jaeger would show three disconnected traces instead of one.
+
+One subtlety that was fixed during implementation: `worker.js`'s retry-republish logic (Week 3) originally only set a fresh `x-retry-count` header and dropped everything else — which would have silently discarded the trace context on any retried message. It now spreads the original headers first, so a retried message still traces back to its original request.
+
+**Viewing traces:** open `http://localhost:16686` (Jaeger UI, via Docker Compose), select a service (`inventory-api`, `inventory-order-worker`, or `inventory-sync-worker`) from the dropdown, and search. Clicking into a trace for an order creation should show spans across all three services nested under one trace ID. **Take a screenshot of this view as your Week 5 deliverable** — create an order via the API, wait a couple seconds for processing, then search Jaeger for the most recent trace on `inventory-api`.
+
 ## Testing
->>>>>>> 7acbccb (CQRS)
 ```bash
 npm test
 ```
 - `tests/auth.test.js` — Week 2 auth + RBAC integration suite.
 - `tests/retryPolicy.test.js` — pure unit tests for exponential backoff decision logic (no infra required).
-<<<<<<< HEAD
-- `tests/orderEvents.test.js` — integration tests: verifies a real message lands on the queue after order creation, and verifies `OrderProcessingService` correctly confirms/rejects/skips against a real database.
-=======
 - `tests/orderEvents.test.js` — Week 3: verifies event publishing + `OrderProcessingService` consumption logic against real infra.
 - `tests/cqrs.test.js` — Week 4: verifies the read-model sync pipeline and that `GET` endpoints correctly read from MongoDB.
+- `tests/rateLimiter.test.js` — Week 5: verifies Token Bucket enforcement, per-identity isolation, refill-over-time behavior, and Redis-outage fail-open, all against an isolated test app instance.
 
-All integration test files are written to tolerate a **live worker/sync-worker running concurrently** — they poll for the expected end state rather than assuming they're the only consumer, since that's the realistic scenario in dev and CI.
-
-RabbitMQ's management UI is available at `http://localhost:15672` (guest/guest) when running via Docker Compose — useful for watching queues fill and drain live while testing.
->>>>>>> 7acbccb (CQRS)
+All integration test files are written to tolerate a **live worker/sync-worker running concurrently** — they poll for the expected end state rather than assuming they're the only consumer, since that's the realistic scenario in dev and CI. Rate limiting is disabled during `npm test` (see Week 5 section above) so it doesn't interfere with the other suites' rapid-fire requests.
 
 RabbitMQ's management UI is available at `http://localhost:15672` (guest/guest) when running via Docker Compose — useful for watching queues fill and drain live while testing.
 
-## Setup: Docker Compose (recommended)
+## Setup — Option A: Docker Compose (recommended)
 ```bash
 cp .env.example .env    # edit DB_PASSWORD, JWT_ACCESS_SECRET, etc.
 docker compose up --build
 docker compose exec api npm run seed
 ```
-<<<<<<< HEAD
-API at `http://localhost:3000`, docs at `http://localhost:3000/api-docs`, RabbitMQ UI at `http://localhost:15672`.
+API at `http://localhost:3000`, docs at `http://localhost:3000/api-docs`, RabbitMQ UI at `http://localhost:15672`, MongoDB at `localhost:27017`, Redis at `localhost:6379`, Jaeger UI at `http://localhost:16686`.
 
-## Endpoints
-- `POST /api/auth/register` / `login` / `refresh` / `logout`
-- `POST /api/orders` — submit an order for async processing → `202 Accepted`, status `PENDING`
-- `GET /api/orders/:id` — fetch an order's current status (poll until `CONFIRMED`/`REJECTED`)
-- `GET /api/orders` — list all orders (**admin only**)
-=======
-API at `http://localhost:3000`, docs at `http://localhost:3000/api-docs`, RabbitMQ UI at `http://localhost:15672`, MongoDB at `localhost:27017`.
-
-## Setup — Option B: Manual (existing MySQL + RabbitMQ + MongoDB containers)
+## Setup — Option B: Manual (existing MySQL + RabbitMQ + MongoDB + Redis + Jaeger containers)
 ```bash
 npm install
 cp .env.example .env
@@ -259,10 +227,10 @@ npm run sync-worker        # terminal 3: the read-model Sync Worker
 ```
 
 ## Endpoints
-- `POST /api/auth/register` / `login` / `refresh` / `logout`
-- `POST /api/orders` — submit an order for async processing → `202 Accepted`, status `PENDING` (write store)
+- `POST /api/auth/register` / `login` / `refresh` / `logout` — rate-limited (strict tier)
+- `POST /api/orders` — submit an order for async processing → `202 Accepted`, status `PENDING` (write store) — rate-limited (general + per-user tiers)
 - `GET /api/orders/:id` — fetch an order's current status from the **read store** (poll until `CONFIRMED`/`REJECTED`)
 - `GET /api/orders` — list all orders from the **read store** (**admin only**)
->>>>>>> 7acbccb (CQRS)
-- `GET /health/live` / `GET /health/ready`
+- `GET /health/live` / `GET /health/ready` (reports Redis status as a diagnostic, never fails readiness because of it)
 - `GET /api-docs` — interactive Swagger UI
+

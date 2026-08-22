@@ -6,7 +6,7 @@ const options = {
     info: {
       title: 'Inventory & Order Management API',
       version: '1.0.0',
-      description: 'High-scale distributed backend — Week 1: DDD + layered architecture. Week 2: OAuth2.0-style auth + RBAC. Week 3: async order processing via RabbitMQ.',
+      description: 'High-scale distributed backend — Week 1: DDD + layered architecture. Week 2: OAuth2.0-style auth + RBAC. Week 3: async order processing via RabbitMQ. Week 4: CQRS — reads served from a MongoDB read store, eventually consistent with the MySQL write store. Week 5: Redis-backed Token Bucket rate limiting + OpenTelemetry/Jaeger distributed tracing.',
     },
     servers: [{ url: '/api', description: 'API base path' }],
     components: {
