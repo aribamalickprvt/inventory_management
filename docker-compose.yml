@@ -100,6 +100,15 @@ services:
       RATE_LIMIT_ORDER_CREATE_CAPACITY: ${RATE_LIMIT_ORDER_CREATE_CAPACITY:-10}
       RATE_LIMIT_ORDER_CREATE_REFILL_PER_SEC: ${RATE_LIMIT_ORDER_CREATE_REFILL_PER_SEC:-2}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    healthcheck:
+      # Dependency-free: node:20-alpine has no curl/wget by default, so this
+      # uses Node's own built-in http module to hit /health/ready instead of
+      # installing anything extra just for the healthcheck.
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health/ready', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     depends_on:
       db:
         condition: service_healthy
@@ -117,6 +126,10 @@ services:
     container_name: inventory-worker
     restart: unless-stopped
     command: node worker.js
+    # No healthcheck: this is a background consumer with no HTTP endpoint to
+    # probe. Docker's own "is the process still running" container state
+    # (visible via `docker compose ps`) is the practical signal here — a
+    # crashed process exits and `restart: unless-stopped` brings it back.
     environment: *common_env
     depends_on:
       db:

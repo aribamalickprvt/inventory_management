@@ -1,13 +1,79 @@
 # Inventory & Order Management API
 
+A high-scale, distributed backend built over a 6-week internship track: Domain-Driven Design → OAuth2.0 + RBAC → event-driven async processing → CQRS with a dedicated read store → Redis rate limiting + distributed tracing → chaos-tested resilience.
+
+## Quick Start
+```bash
+git clone <this-repo>
+cd inventory-order-api
+cp .env.example .env          # edit DB_PASSWORD and JWT_ACCESS_SECRET at minimum
+docker compose up --build     # spins up all 8 services: MySQL, RabbitMQ, MongoDB, Redis, Jaeger, API, Worker, Sync Worker
+docker compose exec api npm run seed
+```
+API: `http://localhost:3000` · Docs: `http://localhost:3000/api-docs` · Jaeger: `http://localhost:16686` · RabbitMQ: `http://localhost:15672` (guest/guest)
+
+Import `postman_collection.json` + `postman_environment.json` into Postman for a ready-to-run request set, or `openapi.json` for the raw OpenAPI 3.0 spec.
+
+## Architecture Diagram
+
+```mermaid
+flowchart TB
+    Client([Client / Postman])
+
+    subgraph API["inventory-api (Express)"]
+        AuthEP["/api/auth/*"]
+        OrderWrite["POST /api/orders<br/>(Command)"]
+        OrderRead["GET /api/orders*<br/>(Query)"]
+        RateLimit["Token Bucket<br/>rate limiter"]
+    end
+
+    MySQL[("MySQL<br/>write store")]
+    Mongo[("MongoDB<br/>read store")]
+    Redis[("Redis<br/>rate limit buckets")]
+    RabbitMQ{{"RabbitMQ<br/>orders_exchange +<br/>order_sync_exchange"}}
+    Worker["inventory-worker<br/>(stock check, confirm/reject)"]
+    SyncWorker["inventory-sync-worker<br/>(read-model sync)"]
+    Jaeger[["Jaeger<br/>(trace collector + UI)"]]
+
+    Client -->|HTTPS| API
+    AuthEP --> MySQL
+    RateLimit -.->|fail-open if down| Redis
+    OrderWrite --> MySQL
+    OrderWrite -->|order.created| RabbitMQ
+    OrderWrite -->|snapshot| RabbitMQ
+    OrderRead --> Mongo
+
+    RabbitMQ -->|order.created| Worker
+    Worker --> MySQL
+    Worker -->|confirmed/rejected snapshot| RabbitMQ
+
+    RabbitMQ -->|snapshot fanout| SyncWorker
+    SyncWorker --> Mongo
+
+    API -.traces.-> Jaeger
+    Worker -.traces.-> Jaeger
+    SyncWorker -.traces.-> Jaeger
+```
+
+**Reading the diagram:** writes (`POST /api/orders`) go through the Command side into MySQL and publish two independent events over RabbitMQ — one triggers async stock processing (Worker), the other triggers read-model sync (Sync Worker). Reads (`GET /api/orders*`) never touch MySQL at all — they go straight to the MongoDB read store, kept eventually consistent by the Sync Worker. All three Node processes export traces to Jaeger, linked into single end-to-end traces across the RabbitMQ boundary via manual W3C Trace Context propagation.
+
+## What Was Built, Week by Week
+| Week | Focus | Key artifacts |
+|---|---|---|
+| 1 | DDD + layered architecture | `domain/`, strict `routes → controllers → services → repositories` flow |
+| 2 | OAuth2.0-style auth + RBAC | JWT access tokens, sliding-window refresh rotation, `authenticate`/`authorize` middleware |
+| 3 | Event-driven async processing | RabbitMQ, `worker.js`, exponential backoff + DLQ |
+| 4 | CQRS + separate read store | `commands/`, `queries/`, MongoDB read model, `syncWorker.js` |
+| 5 | Rate limiting + tracing | Redis Token Bucket (fail-open), OpenTelemetry + Jaeger |
+| 6 | Chaos engineering + finalization | `scripts/chaosTest.js`, `RESILIENCE.md`, finalized OpenAPI + Postman |
+
 ## Architecture Goals
 - **Domain-Driven Design**: business logic lives in `domain/`, isolated from Express and MySQL.
 - **Layered architecture**: strict one-way dependency flow, `routes -> controllers -> commands/queries -> repositories -> domain`.
 - **Aggregates**: `Order` and `InventoryItem` are separate aggregate roots. They reference each other only by ID (SKU), never by object reference.
 - **Event-driven**: order creation is asynchronous — the API publishes, a Worker consumes (Week 3).
 - **CQRS**: writes and reads go through entirely separate paths — a Command handler + MySQL for writes, Query handlers + MongoDB for reads (Week 4).
-- **Resilient by design**: rate limiting and distributed tracing are layered in without becoming single points of failure — Redis being down degrades rate limiting, not the API (Week 5).
-- Future weeks layer in: Chaos Engineering.
+- **Resilient by design**: rate limiting and distributed tracing are layered in without becoming single points of failure — Redis being down degrades rate limiting, not the API (Week 5). Chaos-tested under Week 6 — see `RESILIENCE.md` for what actually held up and what didn't.
 
 ## Bounded Contexts
 | Context   | Aggregate Root  | Owns                          |
@@ -192,7 +258,36 @@ The result: a single order creation produces ONE connected trace in Jaeger spann
 
 One subtlety that was fixed during implementation: `worker.js`'s retry-republish logic (Week 3) originally only set a fresh `x-retry-count` header and dropped everything else — which would have silently discarded the trace context on any retried message. It now spreads the original headers first, so a retried message still traces back to its original request.
 
-**Viewing traces:** open `http://localhost:16686` (Jaeger UI, via Docker Compose), select a service (`inventory-api`, `inventory-order-worker`, or `inventory-sync-worker`) from the dropdown, and search. Clicking into a trace for an order creation should show spans across all three services nested under one trace ID. **Take a screenshot of this view as your Week 5 deliverable** — create an order via the API, wait a couple seconds for processing, then search Jaeger for the most recent trace on `inventory-api`.
+**Viewing traces:** open `http://localhost:16686` (Jaeger UI, via Docker Compose), select a service (`inventory-api`, `inventory-order-worker`, or `inventory-sync-worker`) from the dropdown, and search. Clicking into a trace for an order creation should show spans across all three services nested under one trace ID. **Take a screenshot of this view as evidence** — create an order via the API, wait a couple seconds for processing, then search Jaeger for the most recent trace on `inventory-api`.
+
+## Week 6: Chaos Engineering + Finalization
+
+### Chaos testing
+
+`scripts/chaosTest.js` runs a sustained load of order-creation requests while deliberately stopping and restarting Redis, RabbitMQ, and the order-processing Worker (via the Docker CLI) on a fixed timeline:
+
+```bash
+docker compose up --build      # full stack must be running
+docker compose exec api npm run seed
+npm run chaos-test             # run from the host — needs the Docker CLI and the API reachable at localhost:3000
+```
+
+It prints a windowed (5-second buckets) breakdown of request outcomes across the whole run, so you can see exactly which seconds correspond to which outage. Full methodology, per-scenario predictions (derived from what Weeks 1-5 actually built), and a template for recording your own results live in **[`RESILIENCE.md`](./RESILIENCE.md)** — that file is the actual Week 6 deliverable; this README section just explains how to produce the evidence it asks for.
+
+**The headline finding, spoiler included:** Redis and Worker outages are absorbed gracefully by design (fail-open rate limiting; a queue that simply backs up and drains once the Worker returns). A RabbitMQ outage is **not** currently absorbed — order creation fails outright for the duration, because there's no local fallback (e.g. an outbox table) for the publish step. That's a real, documented gap rather than a hidden one — see `RESILIENCE.md` for the reasoning and the suggested fix.
+
+### Finalized API documentation
+
+- **`openapi.json`** — the complete OpenAPI 3.0 spec, generated from the `@swagger` JSDoc comments across every route file. Regenerate after changing any route's docs:
+  ```bash
+  npm run export-openapi
+  ```
+- **`postman_collection.json`** + **`postman_environment.json`** — import both into Postman (or Insomnia, which also reads Postman v2.1 collections). The `Login` and `Refresh Token` requests have Test scripts that automatically save `accessToken`/`refreshToken` into collection variables, so the rest of the collection can be run without manually copying tokens between requests.
+- **`http://localhost:3000/api-docs`** — the live, interactive Swagger UI, always in sync with the code since it's generated from the same JSDoc comments at runtime.
+
+### One-command startup
+
+`docker compose up --build` brings up all 8 services — `db`, `rabbitmq`, `mongo`, `redis`, `jaeger`, `api`, `worker`, `sync-worker` — with correct `depends_on: condition: service_healthy` ordering, so the API and both Workers don't start attempting connections before their dependencies are actually ready. The `api` service itself now has a Docker healthcheck (hitting its own `/health/ready`) so `docker compose ps` accurately reflects whether the whole stack — not just the containers being "up," but genuinely ready to serve traffic — is healthy.
 
 ## Testing
 ```bash
@@ -234,3 +329,10 @@ npm run sync-worker        # terminal 3: the read-model Sync Worker
 - `GET /health/live` / `GET /health/ready` (reports Redis status as a diagnostic, never fails readiness because of it)
 - `GET /api-docs` — interactive Swagger UI
 
+## Project Artifacts
+- `RESILIENCE.md` — chaos engineering methodology, per-scenario predictions, and results template
+- `openapi.json` — exported OpenAPI 3.0 spec (`npm run export-openapi` to regenerate)
+- `postman_collection.json` / `postman_environment.json` — importable Postman/Insomnia collection with auto-chaining auth
+- `scripts/chaosTest.js` — chaos engineering load + failure-injection script
+- `scripts/loadTestRateLimit.js` — rate limiter burst-testing script
+- `scripts/benchmarkReadLatency.js` — MySQL vs MongoDB read latency comparison

@@ -9,6 +9,11 @@ const options = {
       description: 'High-scale distributed backend — Week 1: DDD + layered architecture. Week 2: OAuth2.0-style auth + RBAC. Week 3: async order processing via RabbitMQ. Week 4: CQRS — reads served from a MongoDB read store, eventually consistent with the MySQL write store. Week 5: Redis-backed Token Bucket rate limiting + OpenTelemetry/Jaeger distributed tracing.',
     },
     servers: [{ url: '/api', description: 'API base path' }],
+    tags: [
+      { name: 'Auth', description: 'Registration, login, token refresh, and logout' },
+      { name: 'Orders', description: 'Order creation (async) and lookup via the CQRS read store' },
+      { name: 'Health', description: 'Liveness and readiness probes' },
+    ],
     components: {
       securitySchemes: {
         bearerAuth: {
@@ -19,6 +24,13 @@ const options = {
         },
       },
       schemas: {
+        RateLimitedResponse: {
+          type: 'object',
+          properties: {
+            error: { type: 'string', example: 'RATE_LIMITED' },
+            message: { type: 'string', example: 'Too many requests — please slow down and try again shortly.' },
+          },
+        },
         RegisterRequest: {
           type: 'object',
           required: ['email', 'password'],

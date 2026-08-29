@@ -4,17 +4,39 @@ const redisClient = require('../config/redis');
 
 const router = express.Router();
 
-// Liveness: is the process running at all? Used by Docker/K8s to know whether to restart the container.
+/**
+ * @swagger
+ * /health/live:
+ *   get:
+ *     summary: Liveness probe — is the process running at all?
+ *     tags: [Health]
+ *     description: Used by Docker/Kubernetes to decide whether to restart the container. Never checks dependencies.
+ *     responses:
+ *       200:
+ *         description: Process is alive
+ */
 router.get('/health/live', (req, res) => {
   res.status(200).json({ status: 'ok' });
 });
 
-// Readiness: is the app ready to serve traffic (i.e. can it actually reach the database)?
-// Redis is checked and reported but deliberately does NOT affect the status
-// code or overall "ok" — the whole point of Week 5's graceful degradation is
-// that the API stays functional (and therefore "ready") even if Redis is
-// down; rate limiting just fails open in that case. This endpoint reports
-// Redis as a diagnostic, not a hard dependency.
+/**
+ * @swagger
+ * /health/ready:
+ *   get:
+ *     summary: Readiness probe — can the app actually serve traffic?
+ *     tags: [Health]
+ *     description: >
+ *       Checks MySQL connectivity (hard dependency — a failure here returns
+ *       503). Redis is checked and reported but deliberately does NOT affect
+ *       the status code: Week 5's graceful degradation means the API stays
+ *       ready and functional even if Redis is down, with rate limiting
+ *       failing open. Redis status is a diagnostic field, not a hard gate.
+ *     responses:
+ *       200:
+ *         description: Ready to serve traffic (db connected; redis status reported informationally)
+ *       503:
+ *         description: Not ready — MySQL is unreachable
+ */
 router.get('/health/ready', async (req, res) => {
   try {
     await db.query('SELECT 1');

@@ -20,6 +20,12 @@ const router = express.Router();
  *         description: User created
  *       400:
  *         description: Validation error or email already registered
+ *       429:
+ *         description: Rate limit exceeded
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RateLimitedResponse'
  */
 router.post('/auth/register', authController.register);
 
@@ -44,6 +50,12 @@ router.post('/auth/register', authController.register);
  *               $ref: '#/components/schemas/TokenResponse'
  *       401:
  *         description: Invalid credentials
+ *       429:
+ *         description: Rate limit exceeded
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RateLimitedResponse'
  */
 router.post('/auth/login', authController.login);
 
@@ -67,6 +79,12 @@ router.post('/auth/login', authController.login);
  *         description: New token pair issued, old refresh token revoked
  *       401:
  *         description: Refresh token invalid, revoked, or expired
+ *       429:
+ *         description: Rate limit exceeded
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RateLimitedResponse'
  */
 router.post('/auth/refresh', authController.refresh);
 
